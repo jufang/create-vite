@@ -1,3 +1,4 @@
+// @ts-check
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,12 +17,21 @@ import {
   yellow,
 } from 'kolorist'
 
-// Avoids autoconversion to number of the project name by defining that the args
-// non associated with an option ( _ ) needs to be parsed as a string. See #4606
+/** 解析命令行传入的参数
+node example/parse.js test1 test2 -a beep -b boop
+# 输出 { _: [test1, test2], a: 'beep', b: 'boop' }
+npx esno src/index.ts   
+ 输出 {_: []}
+npx esno src/index.ts  --template react-ts
+输出 {_: [], template: 'react-ts'}
+npx esno src/index.ts  react-project/ --template react-ts
+输出 {_: ['react-project/'], template: 'react-ts'}
+*/
 const argv = minimist<{
   t?: string
   template?: string
 }>(process.argv.slice(2), { string: ['_'] })
+// 项目绝对路径
 const cwd = process.cwd()
 
 type ColorFunc = (str: string | number) => string
@@ -201,20 +211,24 @@ const renameFiles: Record<string, string | undefined> = {
 const defaultTargetDir = 'vite-project'
 
 async function init() {
+  // 获取传入的第一个参数，作为输出目录,去除前后空格和末尾/线
   const argTargetDir = formatTargetDir(argv._[0])
+  // 获取通过 命令行--template或 --t 传入的模板
   const argTemplate = argv.template || argv.t
-
+  // 输出目录
   let targetDir = argTargetDir || defaultTargetDir
+
   const getProjectName = () =>
     targetDir === '.' ? path.basename(path.resolve()) : targetDir
 
   let result: prompts.Answers<
     'projectName' | 'overwrite' | 'packageName' | 'framework' | 'variant'
   >
-
+  // 如果用户传入参数并且符合规则时 就不会进入询问
   try {
     result = await prompts(
       [
+        // 获取命令行传入的文件名，作为输出目录
         {
           type: argTargetDir ? null : 'text',
           name: 'projectName',
@@ -224,6 +238,7 @@ async function init() {
             targetDir = formatTargetDir(state.value) || defaultTargetDir
           },
         },
+        // 当目录存在或者目录不为空，询问是否覆盖
         {
           type: () =>
             !fs.existsSync(targetDir) || isEmpty(targetDir) ? null : 'confirm',
@@ -234,6 +249,7 @@ async function init() {
               : `Target directory "${targetDir}"`) +
             ` is not empty. Remove existing files and continue?`,
         },
+        // 如果确认覆盖，输入Y(不是false)，输入N(false) 退出询问
         {
           type: (_, { overwrite }: { overwrite?: boolean }) => {
             if (overwrite === false) {
@@ -243,6 +259,7 @@ async function init() {
           },
           name: 'overwriteChecker',
         },
+        // 判断输出目录项目名是否符合package.json命名规范
         {
           type: () => (isValidPackageName(getProjectName()) ? null : 'text'),
           name: 'packageName',
@@ -251,6 +268,7 @@ async function init() {
           validate: (dir) =>
             isValidPackageName(dir) || 'Invalid package.json name',
         },
+        // 如果没有通过--t指定模板，需要询问用户选择预设模板
         {
           type:
             argTemplate && TEMPLATES.includes(argTemplate) ? null : 'select',
@@ -270,6 +288,7 @@ async function init() {
             }
           }),
         },
+        // 判断类型是否有其他类型，如template-ts,react-swc
         {
           type: (framework: Framework) =>
             framework && framework.variants ? 'select' : null,
@@ -300,7 +319,7 @@ async function init() {
   const { framework, overwrite, packageName, variant } = result
 
   const root = path.join(cwd, targetDir)
-
+  // 覆盖已有目录 或 创建空白目录
   if (overwrite) {
     emptyDir(root)
   } else if (!fs.existsSync(root)) {
@@ -314,7 +333,7 @@ async function init() {
     isReactSwc = true
     template = template.replace('-swc', '')
   }
-
+  // 获取npm版本信息
   const pkgInfo = pkgFromUserAgent(process.env.npm_config_user_agent)
   const pkgManager = pkgInfo ? pkgInfo.name : 'npm'
   const isYarn1 = pkgManager === 'yarn' && pkgInfo?.version.startsWith('1.')
@@ -348,9 +367,9 @@ async function init() {
     })
     process.exit(status ?? 0)
   }
-
+  // Scaffolding project in /**/learnProject/create-vite/react-project...
   console.log(`\nScaffolding project in ${root}...`)
-
+  // '/**/learnProject/create-vite/template-react-ts'
   const templateDir = path.resolve(
     fileURLToPath(import.meta.url),
     '../..',
@@ -365,7 +384,7 @@ async function init() {
       copy(path.join(templateDir, file), targetPath)
     }
   }
-
+  // 同步读取模板文件夹
   const files = fs.readdirSync(templateDir)
   for (const file of files.filter((f) => f !== 'package.json')) {
     write(file)
@@ -376,7 +395,7 @@ async function init() {
   )
 
   pkg.name = packageName || getProjectName()
-
+  // 更新package.json中将name属性
   write('package.json', JSON.stringify(pkg, null, 2) + '\n')
 
   if (isReactSwc) {
@@ -384,6 +403,7 @@ async function init() {
   }
 
   const cdProjectName = path.relative(cwd, root)
+  // 脚手架生成成功，打印提示信息
   console.log(`\nDone. Now run:\n`)
   if (root !== cwd) {
     console.log(
@@ -446,7 +466,7 @@ function isEmpty(path: string) {
   const files = fs.readdirSync(path)
   return files.length === 0 || (files.length === 1 && files[0] === '.git')
 }
-
+// 清空目录 如果是.git时 不做处理
 function emptyDir(dir: string) {
   if (!fs.existsSync(dir)) {
     return
@@ -458,7 +478,7 @@ function emptyDir(dir: string) {
     fs.rmSync(path.resolve(dir, file), { recursive: true, force: true })
   }
 }
-
+// 通过 process.env.npm_config_user_agent 获取到当前运行脚本的包管理器和版本号
 function pkgFromUserAgent(userAgent: string | undefined) {
   if (!userAgent) return undefined
   const pkgSpec = userAgent.split(' ')[0]
